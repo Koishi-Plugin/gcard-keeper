@@ -1,21 +1,31 @@
 {
   "name": "koishi-plugin-gcard-keeper",
-  "description": "检测并处理群名片的修改",
+  "description": "检测群名片修改并发送通知，并能自动修改回设定名片（Bot）与原名片（群员），支持正则表达式配置违禁词",
   "version": "0.0.1",
+  "contributors": [
+    "Yis_Rime <yis_rime@outlook.com>"
+  ],
+  "homepage": "https://github.com/YisRime/koishi-plugin-gcard-keeper",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YisRime/koishi-plugin-gcard-keeper.git"
+  },
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
     "lib",
     "dist"
   ],
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "scripts": {},
   "keywords": [
     "chatbot",
     "koishi",
     "plugin"
   ],
-  "devDependencies": {},
+  "devDependencies": {
+    "koishi-plugin-adapter-onebot": "^6.1.3"
+  },
   "peerDependencies": {
     "koishi": "4.18.8"
   }
