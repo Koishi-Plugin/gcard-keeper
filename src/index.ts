@@ -20,6 +20,7 @@ export const usage = `
 export interface Config {
   botNickname: false | string
   revertForbidden: boolean
+  revertExcludeGuilds?: string[]
   forbiddenKeywords?: Record<string, string>
   notification: false | true | string
   notificationMessage: string
@@ -40,6 +41,8 @@ export const Config: Schema<Config> = Schema.object({
   ]).description('自动恢复自身群名片').default(false),
   revertForbidden: Schema.boolean()
     .description('自动恢复违规群名片').default(false),
+  revertExcludeGuilds: Schema.array(String)
+    .description('排除群组列表').role('table'),
   forbiddenKeywords: Schema.dict(Schema.string()).role('table')
     .description('违规群名片配置 (群号:正则)'),
 })
@@ -76,6 +79,7 @@ export function apply(ctx: Context, config: Config) {
 async function handleRevert(session: any, config: Config, logger: Logger, targetUserId: string, newCard: string, oldCard: string) {
   const { guildId, selfId } = session;
 
+  if (config.revertExcludeGuilds?.includes(guildId)) return;
   if (typeof config.botNickname === 'string' && targetUserId === selfId && newCard !== config.botNickname) {
     await session.onebot.setGroupCard(guildId, selfId, config.botNickname);
     return;
