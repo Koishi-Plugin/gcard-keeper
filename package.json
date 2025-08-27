@@ -1,7 +1,7 @@
 {
   "name": "koishi-plugin-gcard-keeper",
   "description": "检测群名片修改并发送通知，并能自动修改回设定名片（Bot）与原名片（群员），支持正则表达式配置违禁词",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "contributors": [
     "Yis_Rime <yis_rime@outlook.com>"
   ],

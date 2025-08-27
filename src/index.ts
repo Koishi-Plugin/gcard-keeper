@@ -42,7 +42,7 @@ export const Config: Schema<Config> = Schema.object({
   revertForbidden: Schema.boolean()
     .description('自动恢复违规群名片').default(false),
   revertExcludeGuilds: Schema.array(String)
-    .description('排除群组列表').role('table'),
+    .description('排除自身群名片恢复列表').role('table'),
   forbiddenKeywords: Schema.dict(Schema.string()).role('table')
     .description('违规群名片配置 (群号:正则)'),
 })
@@ -79,8 +79,8 @@ export function apply(ctx: Context, config: Config) {
 async function handleRevert(session: any, config: Config, logger: Logger, targetUserId: string, newCard: string, oldCard: string) {
   const { guildId, selfId } = session;
 
-  if (config.revertExcludeGuilds?.includes(guildId)) return;
   if (typeof config.botNickname === 'string' && targetUserId === selfId && newCard !== config.botNickname) {
+    if (config.revertExcludeGuilds?.includes(guildId)) return;
     await session.onebot.setGroupCard(guildId, selfId, config.botNickname);
     return;
   }
@@ -131,7 +131,7 @@ async function handleNotify(session: any, logger: Logger, config: Config, oldCar
 
     const message = config.notificationMessage.replace(
       /\{userName\}|\{userId\}|\{guildName\}|\{guildId\}|\{oldCard\}|\{newCard\}/g,
-      (match) => replacements[match]
+      (match) => replacements[match as keyof typeof replacements]
     )
 
     if (message.trim()) await bot.sendMessage(targetChannelId, message)
