@@ -18,7 +18,9 @@ export const usage = `
 `
 
 export interface Config {
-  botNickname: false | string
+  botNickname: string
+  revertOnReady: boolean
+  revertOnUpdate: boolean
   revertForbidden: boolean
   revertExcludeGuilds?: string[]
   forbiddenKeywords?: Record<string, string>
@@ -35,10 +37,9 @@ export const Config: Schema<Config> = Schema.object({
   notificationMessage: Schema.string()
     .description('通知消息模板')
     .default('{guildName}({guildId}) 中 {userName}({userId}) 的名片由 {oldCard} 更新为 {newCard}'),
-  botNickname: Schema.union([
-    Schema.const(false).description('关闭'),
-    Schema.string().description('开启'),
-  ]).description('自动恢复自身群名片').default(false),
+  botNickname: Schema.string().description('机器人群名片'),
+  revertOnReady: Schema.boolean().description('初始化时恢复').default(false),
+  revertOnUpdate: Schema.boolean().description('被修改时恢复').default(false),
   revertForbidden: Schema.boolean()
     .description('自动恢复违规群名片').default(false),
   revertExcludeGuilds: Schema.array(String)
@@ -55,16 +56,45 @@ export const Config: Schema<Config> = Schema.object({
 export function apply(ctx: Context, config: Config) {
   const logger = ctx.logger(name)
 
-  ctx.on('guild-member' as any, async (session) => {
-    if (session.platform !== 'onebot' || session.event._data?.notice_type !== 'group_card') return
+  if (config.revertOnReady && config.botNickname) {
+    ctx.on('ready', async () => {
+      for (const bot of ctx.bots) {
+        if (bot.platform !== 'onebot' || !bot.online) continue
+        try {
+          const groupList = await bot.internal.getGroupList()
+          for (const group of groupList) {
+            const guildId = group.group_id.toString()
+            if (config.revertExcludeGuilds?.includes(guildId)) continue
+            try {
+              await bot.internal.setGroupCard(guildId, bot.selfId, config.botNickname)
+            } catch (e) {
+              logger.warn(`在群聊 ${guildId} 中设置名片失败:`, e)
+            }
+          }
+        } catch (e) {
+          logger.error(`机器人 ${bot.selfId} 初始化群名片失败:`, e)
+        }
+      }
+    })
+  }
 
-    const { card_old: oldCard, card_new: newCard, user_id: rawUserId } = session.event._data
-    const targetUserId = String(rawUserId)
-    if (oldCard === newCard) return
+  const isGuildMemberListenerNeeded =
+    config.revertOnUpdate ||
+    config.revertForbidden ||
+    config.notification !== false
 
-    await handleRevert(session, config, logger, targetUserId, newCard, oldCard)
-    await handleNotify(session, logger, config, oldCard, newCard)
-  })
+  if (isGuildMemberListenerNeeded) {
+    ctx.on('guild-member' as any, async (session) => {
+      if (session.platform !== 'onebot' || session.event._data?.notice_type !== 'group_card') return
+
+      const { card_old: oldCard, card_new: newCard, user_id: rawUserId } = session.event._data
+      const targetUserId = String(rawUserId)
+      if (oldCard === newCard) return
+
+      await handleRevert(session, config, logger, targetUserId, newCard, oldCard)
+      await handleNotify(session, logger, config, oldCard, newCard)
+    })
+  }
 }
 
 /**
@@ -79,7 +109,7 @@ export function apply(ctx: Context, config: Config) {
 async function handleRevert(session: any, config: Config, logger: Logger, targetUserId: string, newCard: string, oldCard: string) {
   const { guildId, selfId } = session;
 
-  if (typeof config.botNickname === 'string' && targetUserId === selfId && newCard !== config.botNickname) {
+  if (config.revertOnUpdate && config.botNickname && targetUserId === selfId && newCard !== config.botNickname) {
     if (config.revertExcludeGuilds?.includes(guildId)) return;
     await session.onebot.setGroupCard(guildId, selfId, config.botNickname);
     return;
