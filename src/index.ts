@@ -1,4 +1,4 @@
-import { Context, Schema, Logger, Session } from 'koishi'
+import { Context, Schema, Logger, Session, sleep } from 'koishi'
 import {} from 'koishi-plugin-adapter-onebot'
 
 const logger = new Logger('gcard-keeper')
@@ -48,15 +48,17 @@ export const Config: Schema<Config> = Schema.object({
 export function apply(ctx: Context, config: Config) {
   if (config.revertOnReady && config.botNickname) {
     ctx.on('ready', async () => {
+      sleep(5000)
       for (const bot of ctx.bots.filter(b => b.platform === 'onebot')) {
         try {
           const list = await (bot as any).internal?.getGroupList?.() || []
           const ids = list.map((g: any) => g.group_id?.toString()).filter(Boolean)
-          logger.info(`机器人 ${bot.selfId} 所在群列表: ${ids.join(', ')}`)
+          logger.debug(`机器人 ${bot.selfId} 所在群列表: ${ids.join(', ')}`)
           for (const gid of ids) {
             if (config.revertExcludeGuilds?.includes(gid)) continue
+            sleep(5000)
             await (bot as any).internal?.setGroupCard?.(gid, bot.selfId, config.botNickname)
-              .then(() => logger.info(`已设置群 ${gid} 中 ${bot.selfId} 的名片`))
+              .then(() => logger.debug(`已设置群 ${gid} 中 ${bot.selfId} 的名片`))
               .catch((e: any) => logger.error(`设置群 ${gid} 中 ${bot.selfId} 的名片失败:`, e))
           }
         } catch (e) {
