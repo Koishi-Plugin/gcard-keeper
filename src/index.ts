@@ -47,8 +47,7 @@ export const Config: Schema<Config> = Schema.object({
 
 export function apply(ctx: Context, config: Config) {
   if (config.revertOnReady && config.botNickname) {
-    ctx.on('ready', async () => {
-      sleep(5000)
+    ctx.on('bot-connect', async () => {
       for (const bot of ctx.bots.filter(b => b.platform === 'onebot')) {
         try {
           const list = await (bot as any).internal?.getGroupList?.() || []
