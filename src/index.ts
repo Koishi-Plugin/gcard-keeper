@@ -1,7 +1,7 @@
-import { Context, Schema, Logger } from 'koishi'
+import { Context, Schema, Logger, Session } from 'koishi'
 import {} from 'koishi-plugin-adapter-onebot'
 
-export const name = 'gcard-keeper'
+const logger = new Logger('gcard-keeper')
 
 export const usage = `
 <div style="border-radius: 10px; border: 1px solid #ddd; padding: 16px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
@@ -32,161 +32,78 @@ export const Config: Schema<Config> = Schema.object({
   notification: Schema.union([
     Schema.const(false).description('关闭'),
     Schema.const(true).description('开启 (原群)'),
-    Schema.string().description('开启 (指定目标)'),
-  ]).description('群名片变更通知').default(false),
+    Schema.string().description('开启 (指定)'),
+  ]).description('名片变更通知').default(false),
   notificationMessage: Schema.string()
     .description('通知消息模板')
-    .default('{guildName}({guildId}) 中 {userName}({userId}) 的名片由 {oldCard} 更新为 {newCard}'),
+    .default('群:{guildName}({guildId})\n用户:{userName}({userId})\n名片:{newCard}({oldCard})'),
   botNickname: Schema.string().description('机器人群名片'),
   revertOnReady: Schema.boolean().description('初始化时恢复').default(false),
   revertOnUpdate: Schema.boolean().description('被修改时恢复').default(false),
-  revertForbidden: Schema.boolean()
-    .description('自动恢复违规群名片').default(false),
-  revertExcludeGuilds: Schema.array(String)
-    .description('排除自身群名片恢复列表').role('table'),
-  forbiddenKeywords: Schema.dict(Schema.string()).role('table')
-    .description('违规群名片配置 (群号:正则)'),
+  revertForbidden: Schema.boolean().description('恢复违规名片').default(false),
+  revertExcludeGuilds: Schema.array(String).description('自身排除列表').role('table'),
+  forbiddenKeywords: Schema.dict(Schema.string()).role('table').description('违规名片配置'),
 })
 
-/**
- * 插件主函数
- * @param ctx Koishi 上下文
- * @param config 插件配置
- */
 export function apply(ctx: Context, config: Config) {
-  const logger = ctx.logger(name)
-
   if (config.revertOnReady && config.botNickname) {
     ctx.on('ready', async () => {
-      for (const bot of ctx.bots) {
-        if (bot.platform !== 'onebot' || !bot.online) continue
+      for (const bot of ctx.bots.filter(b => b.platform === 'onebot')) {
         try {
-          const groupList = await bot.internal.getGroupList()
-          for (const group of groupList) {
-            const guildId = group.group_id.toString()
-            if (config.revertExcludeGuilds?.includes(guildId)) continue
-            try {
-              await bot.internal.setGroupCard(guildId, bot.selfId, config.botNickname)
-            } catch (e) {
-              logger.warn(`在群聊 ${guildId} 中设置名片失败:`, e)
-            }
+          const list = await (bot as any).internal?.getGroupList?.() || []
+          const ids = list.map((g: any) => g.group_id?.toString()).filter(Boolean)
+          logger.info(`机器人 ${bot.selfId} 所在群列表: ${ids.join(', ')}`)
+          for (const gid of ids) {
+            if (config.revertExcludeGuilds?.includes(gid)) continue
+            await (bot as any).internal?.setGroupCard?.(gid, bot.selfId, config.botNickname)
+              .then(() => logger.info(`已设置群 ${gid} 中 ${bot.selfId} 的名片`))
+              .catch((e: any) => logger.error(`设置群 ${gid} 中 ${bot.selfId} 的名片失败:`, e))
           }
         } catch (e) {
-          logger.error(`机器人 ${bot.selfId} 初始化群名片失败:`, e)
+          logger.error(`初始化 ${bot.selfId} 群名片失败:`, e)
         }
       }
     })
   }
 
-  const isGuildMemberListenerNeeded =
-    config.revertOnUpdate ||
-    config.revertForbidden ||
-    config.notification !== false
-
-  if (isGuildMemberListenerNeeded) {
-    ctx.on('guild-member' as any, async (session) => {
-      if (session.platform !== 'onebot' || session.event._data?.notice_type !== 'group_card') return
-
-      const { card_old: oldCard, card_new: newCard, user_id: rawUserId } = session.event._data
-      const targetUserId = String(rawUserId)
-      if (oldCard === newCard) return
-
-      await handleRevert(session, config, logger, targetUserId, newCard, oldCard)
-      await handleNotify(session, logger, config, oldCard, newCard)
+  const needListener = config.revertOnUpdate || config.revertForbidden || config.notification !== false
+  if (needListener) {
+    ctx.on('guild-member' as any, async (session: Session) => {
+      const data = (session.event as any)?._data
+      if (session.platform !== 'onebot' || data?.notice_type !== 'group_card') return
+      const { card_old: oldCard = '', card_new: newCard = '', user_id } = data
+      const { guildId, selfId, bot } = session
+      const targetUserId = String(user_id || '')
+      if (!guildId || !targetUserId || oldCard === newCard) return
+      let isReverted = false
+      const isBot = targetUserId === selfId
+      if (isBot && config.revertOnUpdate && config.botNickname && newCard !== config.botNickname) {
+        if (!config.revertExcludeGuilds?.includes(guildId)) {
+          await (bot as any).internal?.setGroupCard?.(guildId, selfId, config.botNickname)
+          logger.info(`已恢复群 ${guildId} 中 ${selfId} 的名片`)
+          isReverted = true
+        }
+      }
+      const regex = config.forbiddenKeywords?.[guildId]
+      if (!isReverted && config.revertForbidden && regex && new RegExp(regex).test(newCard)) {
+        const info = await (bot as any).internal.getGroupMemberInfo?.(guildId, selfId, true)
+        if (['admin', 'owner'].includes(info?.role)) await (bot as any).internal?.setGroupCard?.(guildId, targetUserId, oldCard)
+      }
+      let target = config.notification === true ? guildId : (typeof config.notification === 'string' ? config.notification : null)
+      if (target?.includes(':')) {
+        const [type, id] = target.split(':')
+        target = (id && (type === 'guild' || type === 'private')) ? (type === 'guild' ? id : target) : guildId
+      }
+      if (target && config.notificationMessage) {
+        const [u, g] = await Promise.all([bot.getUser(targetUserId), bot.getGuild(guildId)])
+        const msg = config.notificationMessage.replace(/\{(userName|userId|guildName|guildId|oldCard|newCard)\}/g, (m) => {
+          return {
+            '{userName}': u?.name || targetUserId, '{userId}': targetUserId, '{guildName}': g?.name || guildId,
+            '{guildId}': guildId, '{oldCard}': oldCard || '无', '{newCard}': newCard || '无'
+          }[m] || m
+        })
+        if (msg.trim()) await bot.sendMessage(target, msg)
+      }
     })
   }
-}
-
-/**
- * 处理所有恢复逻辑
- * @param session Koishi 会话对象
- * @param config 插件配置
- * @param logger 日志记录器
- * @param targetUserId 目标用户ID
- * @param newCard 新名片
- * @param oldCard 旧名片
- */
-async function handleRevert(session: any, config: Config, logger: Logger, targetUserId: string, newCard: string, oldCard: string) {
-  const { guildId, selfId } = session;
-
-  if (config.revertOnUpdate && config.botNickname && targetUserId === selfId && newCard !== config.botNickname) {
-    if (config.revertExcludeGuilds?.includes(guildId)) return;
-    await session.onebot.setGroupCard(guildId, selfId, config.botNickname);
-    return;
-  }
-
-  const forbiddenRegexStr = config.forbiddenKeywords?.[guildId];
-  if (config.revertForbidden && forbiddenRegexStr) {
-    try {
-      if (new RegExp(forbiddenRegexStr).test(newCard)) {
-        const botInfo = await session.onebot.getGroupMemberInfo(+guildId, +selfId, true);
-        const isAdmin = botInfo?.role === 'owner' || botInfo?.role === 'admin';
-        if (isAdmin) await session.onebot.setGroupCard(guildId, targetUserId, oldCard);
-      }
-    } catch (error) {
-      logger.warn(`恢复名片(${guildId}:${targetUserId})出错:`, error);
-    }
-  }
-}
-
-/**
- * 处理发送通知逻辑
- * @param session Koishi 会话对象
- * @param logger 日志记录器
- * @param config 插件配置
- * @param oldCard 旧名片
- * @param newCard 新名片
- */
-async function handleNotify(session: any, logger: Logger, config: Config, oldCard: string, newCard: string) {
-  const targetChannelId = getNotificationTarget(config, session.guildId, logger)
-  if (!targetChannelId || !config.notificationMessage) return
-
-  const { bot } = session
-  const targetUserId = session.event._data.user_id.toString()
-
-  try {
-    const [user, guild] = await Promise.all([
-      bot.getUser(targetUserId).catch(() => null),
-      bot.getGuild(session.guildId).catch(() => null),
-    ])
-
-    const replacements = {
-      '{userName}': user?.name || targetUserId,
-      '{userId}': targetUserId,
-      '{guildName}': guild?.name || session.guildId,
-      '{guildId}': session.guildId,
-      '{oldCard}': oldCard || '无',
-      '{newCard}': newCard || '无',
-    }
-
-    const message = config.notificationMessage.replace(
-      /\{userName\}|\{userId\}|\{guildName\}|\{guildId\}|\{oldCard\}|\{newCard\}/g,
-      (match) => replacements[match as keyof typeof replacements]
-    )
-
-    if (message.trim()) await bot.sendMessage(targetChannelId, message)
-  } catch (error) {
-    logger.error(`发送群名片变动通知至 ${targetChannelId} 失败:`, error)
-  }
-}
-
-/**
- * 根据配置确定发送通知的目标频道ID
- * @param config 插件配置
- * @param guildId 事件发生的群组ID
- * @param logger 日志记录器
- * @returns 目标频道ID，如果无需发送则返回 null
- */
-function getNotificationTarget(config: Config, guildId: string, logger: Logger): string | null {
-  if (config.notification === false) return null
-  if (config.notification === true) return guildId
-
-  if (typeof config.notification === 'string') {
-    const [targetType, targetId] = config.notification.split(':')
-    if (targetId && (targetType === 'guild' || targetType === 'private')) return targetType === 'guild' ? targetId : `private:${targetId}`
-    logger.warn(`通知目标格式错误: ${config.notification}`)
-    return guildId
-  }
-
-  return null
 }
