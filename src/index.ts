@@ -47,22 +47,22 @@ export const Config: Schema<Config> = Schema.object({
 
 export function apply(ctx: Context, config: Config) {
   if (config.revertOnReady && config.botNickname) {
-    ctx.on('bot-connect', async () => {
-      for (const bot of ctx.bots.filter(b => b.platform === 'onebot')) {
-        try {
-          const list = await (bot as any).internal?.getGroupList?.() || []
-          const ids = list.map((g: any) => g.group_id?.toString()).filter(Boolean)
-          logger.debug(`机器人 ${bot.selfId} 所在群列表: ${ids.join(', ')}`)
-          for (const gid of ids) {
-            if (config.revertExcludeGuilds?.includes(gid)) continue
-            sleep(5000)
-            await (bot as any).internal?.setGroupCard?.(gid, bot.selfId, config.botNickname)
-              .then(() => logger.debug(`已设置群 ${gid} 中 ${bot.selfId} 的名片`))
-              .catch((e: any) => logger.error(`设置群 ${gid} 中 ${bot.selfId} 的名片失败:`, e))
-          }
-        } catch (e) {
-          logger.error(`初始化 ${bot.selfId} 群名片失败:`, e)
+    ctx.on('bot-connect', async (bot) => {
+      if (bot.platform !== 'onebot') return
+      try {
+        await sleep(10000)
+        const list = await (bot as any).internal?.getGroupList?.() || []
+        const ids = list.map((g: any) => g.group_id?.toString()).filter(Boolean)
+        logger.debug(`机器人 ${bot.selfId} 所在群列表: ${ids.join(', ')}`)
+        for (const gid of ids) {
+          if (config.revertExcludeGuilds?.includes(gid)) continue
+          await sleep(10000)
+          await (bot as any).internal?.setGroupCard?.(gid, bot.selfId, config.botNickname)
+            .then(() => logger.debug(`已设置群 ${gid} 中 ${bot.selfId} 的名片`))
+            .catch((e: any) => logger.error(`设置群 ${gid} 中 ${bot.selfId} 的名片失败:`, e))
         }
+      } catch (e) {
+        logger.error(`初始化 ${bot.selfId} 群名片失败:`, e)
       }
     })
   }
